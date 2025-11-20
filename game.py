@@ -3,8 +3,12 @@ from dataclasses import dataclass
 from typing import Callable
 
 import pygame
+import pygame.font
 import torch
 import numpy as np
+
+pygame.init()
+pygame.font.get_init()
 
 ## TODO: SCARY
 ## TODO: as AI gets closer the screen shakes, gets red
@@ -100,6 +104,7 @@ class Game:
     state: str # intro, game over, play
     delta: int
     frame: int
+    font: pygame.font.Font
     screen: pygame.surface.Surface
     clock: pygame.time.Clock
 
@@ -143,9 +148,12 @@ game = Game(
     ai=ai,
     background=Background(
         color="purple",
-        shake=4,
+        shake=0,
         rect=pygame.Rect(0,0,width,height)
     ),
+    #font=pygame.font.SysFont(),
+    #font=pygame.font.SysFont("Arial", 30),
+    font=None,
     width=width,
     height=height,
     running=True,
@@ -155,6 +163,30 @@ game = Game(
     screen=pygame.display.set_mode((width, height)),
     clock=pygame.time.Clock(),
 )
+
+def collision(game: Game):
+    distance = proximity(
+        ai.position.x,
+        ai.position.y,
+        player.position.x,
+        player.position.y,
+    )
+
+
+    radi = ai.size//2 + player.size//2
+    #print("distance", distance)
+    #print("radi", radi)
+    if distance <= radi:
+        return True, distance - radi
+    else:
+        return False, distance - radi
+
+def proximity(x1, y1, x2, y2):
+    xd = abs(x1 - x2)
+    yd = abs(y1 - y2)
+    distance = int(xd + yd)
+
+    return distance
 
 def render_game_scene(game: Game):
     game.frame += 1
@@ -175,15 +207,30 @@ def render_game_over_scene(game: Game):
     pygame.time.delay(3000)
     game.running = False
 
-
 ## Render Player and AI
 def render_entity(game: Game, entity: Entity):
     pygame.draw.circle(game.screen, entity.color, entity.position, entity.size)
+    #pygame.draw.text(game.screen, entity.color, entity.position, entity.size)
 
 def render_player(game: Game):
     x, y = pygame.mouse.get_pos()
-    game.player.position.x = x
-    game.player.position.y = y
+    position = game.player.position
+    position.x = x
+    position.y = y
+
+    collided, distance = collision(game)
+    if 500 >= distance:
+        game.background.shake = (500 - distance) // 10
+    else:
+        game.background.shake = 0
+
+    print("shake",game.background.shake)
+
+    shake = game.background.shake
+    if shake:
+        position.x += np.random.randint(-shake, shake)
+        position.y += np.random.randint(-shake, shake)
+
     render_entity(game, game.player)
 
 def render_ai(game: Game):
@@ -247,15 +294,14 @@ def train(game: Game, features, labels):
     game.ai.optimizer.step()
 
     ## TODO REMOVE
-    print(
-        f"{len(game.ai.losses)}:",
-        sum(game.ai.losses) / len(game.ai.losses)
-    )
+    #print(
+    #    f"{len(game.ai.losses)}:",
+    #    sum(game.ai.losses) / len(game.ai.losses)
+    #)
 
     return output
 
 ## Main Game Loop
-pygame.init()
 while game.running:
     ## Handle Events
     for event in pygame.event.get():
