@@ -9,6 +9,9 @@ import numpy as np
 
 pygame.init()
 pygame.font.get_init()
+pygame.mixer.music.load("ai.wav")
+pygame.mixer.music.play(loops=-1)
+pygame.mixer.music.set_volume(0.01)
 
 ## TODO: SCARY
 ## TODO: as AI gets closer the screen shakes, gets red
@@ -60,7 +63,6 @@ PLAYER_NAMES = [
     'Mosh',
     'Alazr',
     'Ahmed',
-    'GOD',
 ]
 
 @dataclass
@@ -69,18 +71,17 @@ class Entity:
     position: pygame.Vector2
     speed: float
     size: int
-    color: str
+    color: Tuple[int, int, int]
+    text_color: Tuple[int, int, int]
 
 @dataclass
 class AI(Entity):
-    ### TODO: circular dep problem
-    #render: Callable
     level: int
     model: None
-    learning: float
+    learning: int
     optimizer: torch.optim.adamw.AdamW
     loss: torch.nn.modules.loss.MSELoss
-    losses: List
+    knowledge: int
 
 @dataclass
 class Player(Entity):
@@ -88,7 +89,7 @@ class Player(Entity):
 
 @dataclass
 class Background():
-    color: str
+    color: Tuple[int, int, int]
     shake: int
     rect: pygame.Rect
 
@@ -104,6 +105,7 @@ class Game:
     state: str # intro, game over, play
     delta: int
     frame: int
+    game_over_frame: int
     font: pygame.font.Font
     screen: pygame.surface.Surface
     clock: pygame.time.Clock
@@ -119,35 +121,37 @@ player = Player(
     position=pygame.Vector2(1, 1),
     speed=0,
     size=60,
-    color="green",
+    color=(0, 255, 255),
+    text_color=(0, 155, 155),
 )
 ## TODO: reduce modle for lower levels
 model = torch.nn.Sequential(
-    torch.nn.Linear(4, 8),
+    torch.nn.Linear(4, 16),
     torch.nn.ReLU(),
-    torch.nn.Linear(8, 8),
+    torch.nn.Linear(16, 16),
     torch.nn.ReLU(),
-    torch.nn.Linear(8, 2),
+    torch.nn.Linear(16, 2),
     torch.nn.Tanh(),
 )
 ai = AI(
     name ="AI",
     position=pygame.Vector2(360, 640),
-    level=100,
-    speed=0.5,
+    level=1,
+    speed=1,
     size=120,
-    color="red",
+    color=(255, 0, 0),
+    text_color=(255, 255, 255),
     model=model,
-    learning=1e-3,
+    learning=5, # 1 is highest, 10 is lowest
     optimizer=torch.optim.AdamW(model.parameters(), lr=1e-3),
     loss=torch.nn.MSELoss(),
-    losses=[],
+    knowledge=0,
 )
 game = Game(
     player=player,
     ai=ai,
     background=Background(
-        color="purple",
+        color=(100, 0, 250),
         shake=0,
         rect=pygame.Rect(0,0,width,height)
     ),
@@ -158,9 +162,18 @@ game = Game(
     state="play",
     delta=0,
     frame=0,
+    game_over_frame=0,
     screen=pygame.display.set_mode((width, height)),
     clock=pygame.time.Clock(),
 )
+
+def set_level(game: Game, level: int):
+    game.ai.level      = level
+    game.ai.knowledge  = 0
+    game.ai.speed      = 1 + (level * 0.4)
+    game.ai.size       = 120 + (level * 10)
+    game.ai.position.x = 360
+    game.ai.position.y = -game.ai.size
 
 def collision(game: Game):
     distance = proximity(
@@ -170,8 +183,6 @@ def collision(game: Game):
         player.position.y,
     )
     radi = ai.size + player.size
-    print("distance", distance)
-    print("radi", radi)
     if distance <= radi:
         return True, distance - radi
     else:
@@ -183,8 +194,6 @@ def proximity(x1, y1, x2, y2):
     return int(np.sqrt(xd + yd))
 
 def render_game_scene(game: Game):
-    game.frame += 1
-
     render_background(game)
     render_player(game)
     render_ai(game)
@@ -197,15 +206,18 @@ def render_game_over_scene(game: Game):
     text = game.font.render("Game Over", True, "red")
     game.screen.blit(text, (game.width // 2 - text.get_width() // 2, game.height // 2 - text.get_height() // 2))
     pygame.display.flip()
-    pygame.time.delay(3000)
-    game.state = "play"
+
+    ## Restart Game in a few seconds
+    if game.frame > game.game_over_frame + 600:
+        game.state = "play"
+        set_level(game, level=1)
 
 ## Render Player and AI
 def render_entity(game: Game, entity: Entity):
     position = entity.position
     pygame.draw.circle(game.screen, entity.color, entity.position, entity.size)
 
-    text = game.font.render(entity.name, True, "white")
+    text = game.font.render(entity.name, True, entity.text_color)
     game.screen.blit(text, (
         position.x - text.get_width()  // 2,
         position.y - text.get_height() // 2,
@@ -218,10 +230,12 @@ def render_player(game: Game):
     position.y = y
 
     collided, distance = collision(game)
-    if 500 >= distance:
-        game.background.shake = (500 - distance) // 50
+    if 400 >= distance:
+        game.background.shake = (400 - distance) // 50
+        pygame.mixer.music.set_volume((400 - distance)/400)
     else:
         game.background.shake = 0
+        pygame.mixer.music.set_volume(0.01)
 
     print("shake",game.background.shake)
 
@@ -234,6 +248,7 @@ def render_player(game: Game):
 
     collided, distance = collision(game)
     if collided:
+        game.game_over_frame = game.frame
         game.state = "game over"
 
 def render_ai(game: Game):
@@ -277,30 +292,29 @@ def render_background(game: Game):
     pygame.draw.rect(game.screen, game.background.color, game.background.rect)
 
 def train(game: Game, features, labels):
-    ## TODO consider encoding/decoding inside this function
-    ## TODO consider encoding/decoding inside this function
-    ## TODO consider encoding/decoding inside this function
+    game.ai.optimizer.zero_grad()
+
     features = torch.tensor(features, dtype=torch.float32)
     labels   = torch.tensor(labels, dtype=torch.float32)
-    game.ai.optimizer.zero_grad()
-    output = game.ai.model(features)
+    output   = game.ai.model(features)
 
-    ## TODO based on level
-    if len(game.ai.losses) > game.ai.level * 100:
+    game.ai.knowledge += 1
+    if game.ai.knowledge > game.ai.level * 150:
+        set_level(game, game.ai.level + 1)
         return output
 
-    ## Train once every 10 frames
-    if game.frame % 10 > 0:
+    ## TODO based on level?
+    ## Train once every 5 frames
+    if game.frame % game.ai.learning > 0:
         return output
 
     loss = game.ai.loss(output, labels)
-    game.ai.losses.append(loss.item())
-    game.ai.losses = game.ai.losses[-500:]
-
     loss.backward()
     game.ai.optimizer.step()
 
     ## TODO REMOVE
+    #game.ai.losses.append(loss.item())
+    #game.ai.losses = game.ai.losses[-500:]
     #print(
     #    f"{len(game.ai.losses)}:",
     #    sum(game.ai.losses) / len(game.ai.losses)
@@ -316,6 +330,7 @@ while game.running:
             game.running = False
 
     ## Game State Management
+    game.frame += 1
     match game.state:
         case "intro":
             pass
