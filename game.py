@@ -69,6 +69,10 @@ pygame.mixer.music.play(-1)
 ## TODO:  POINT SYSTEM to see how good you did!
 ## TODO: 
 ## TODO: 
+## TODO:  BOSS FIGHT AFTER NUMBER OF LEVELS
+## TODO: 
+## TODO: 
+## TODO: 
 ## TODO: Multiplayer?!?!?!? 
 ## TODO: number of active players
 ## TODO: 
@@ -127,11 +131,14 @@ class AI(Entity):
     optimizer: torch.optim.adamw.AdamW
     loss: torch.nn.modules.loss.MSELoss
     losses: List
+    features: List
+    labels: List
+    output: List
     knowledge: int
 
 @dataclass
 class Player(Entity):
-    happiness: float
+    score: float
 
 @dataclass
 class Background():
@@ -165,7 +172,7 @@ height = 1280
 
 ## Main Game Setup
 player = Player(
-    happiness=100.0,
+    score=1,
     name=np.random.choice(PLAYER_NAMES),
     position=pygame.Vector2(1, 1),
     speed=0,
@@ -195,6 +202,9 @@ ai = AI(
     optimizer=torch.optim.AdamW(model.parameters(), lr=1e-3),
     loss=torch.nn.MSELoss(),
     losses=[],
+    features=[[0,0,0,0]],
+    labels=[[0,0]],
+    output=[[0,0]],
     knowledge=0,
 )
 game = Game(
@@ -290,6 +300,29 @@ def render_player(game: Game):
             game.wait_frame = game.frame
             game.scene = "game over"
 
+def render_stats(game: Game):
+    if not game.scene == "game over":
+        game.score = game.frame
+
+    cost      = sum(game.ai.losses) / (len(game.ai.losses) or 1)
+    output    = game.ai.output
+    features  = game.ai.features
+    labels    = game.ai.labels
+    ai_status = f"""
+AI Cost: (knowledge):  {cost:.4f} 
+Features (input data): {features[0][0]:.4f} 
+                       {features[0][1]:.4f} 
+                       {features[0][2]:.4f} 
+                       {features[0][3]:.4f} 
+Labels: (training):    {labels[0][0]:.3f} 
+                       {labels[0][1]:.3f} 
+Output: (AI movement): {output[0][0]:.3f} 
+                       {output[0][1]:.3f} 
+Score: (Player):       {game.score // 6}
+    """
+    text = game.status_font.render(ai_status, True, (128,128,128))
+    game.screen.blit(text, (game.width - 10 - text.get_width(), 10))
+
 def render_ai(game: Game):
     ## Calculate slope for both x and y for AI to Player
     dx = game.player.position.x - game.ai.position.x
@@ -305,21 +338,8 @@ def render_ai(game: Game):
         game.ai.position.x     / width,
         game.ai.position.y     / height,
     ]]
-
-    ## Render Text Status of AI Learning cost = sum(game.ai.losses) / (len(game.ai.losses) or 1)
-    ## Error / Loss / Delta
-    cost = sum(game.ai.losses) / (len(game.ai.losses) or 1)
-    ai_status = f"""
-AI Cost: (knowledge):  {cost:.4f} 
-Features (input data): {features[0][0]:.4f} 
-                       {features[0][1]:.4f} 
-                       {features[0][2]:.4f} 
-                       {features[0][3]:.4f} 
-Labels: (output data): {labels[0][0]:.3f} 
-                       {labels[0][1]:.3f} 
-    """
-    text = game.status_font.render(ai_status, True, (0,0,0))
-    game.screen.blit(text, (game.width - 10 - text.get_width(), 10))
+    game.ai.features = features
+    game.ai.labels = labels
 
     ## Train and get latest directions
     ai_directions = train(game, features, labels)
@@ -364,6 +384,9 @@ def train(game: Game, features, labels):
     labels   = torch.tensor(labels, dtype=torch.float32)
     output   = game.ai.model(features)
 
+    ## For display later
+    game.ai.output = output
+
     game.ai.knowledge += 1
     if game.ai.knowledge > game.ai.level * 150:
         set_level(game, game.ai.level + 1)
@@ -392,9 +415,9 @@ def train(game: Game, features, labels):
 
 def render_game_scene(game: Game):
     render_background(game)
+    render_stats(game)
 
     render_ai(game)
-
     render_player(game)
 
     pygame.display.flip()
@@ -402,13 +425,15 @@ def render_game_scene(game: Game):
 
 def render_game_over_scene(game: Game):
     game.screen.fill("black")
-    text = game.game_over_font.render("Game Over", True, "red")
+    text = game.game_over_font.render("Humanity Lost", True, "red")
     game.screen.blit(text, (game.width // 2 - text.get_width() // 2, game.height // 2 - text.get_height() // 2))
+    render_stats(game)
     pygame.display.flip()
 
     ## Restart Game in a few seconds
     if game.frame > game.wait_frame + 1200:
         ## allow player to get away after game over
+        game.frame = 0
         game.wait_frame = game.frame
         game.scene = "play"
         set_level(game, level=1)
