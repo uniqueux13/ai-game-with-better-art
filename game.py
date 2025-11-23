@@ -29,6 +29,11 @@ STEP_INTERVAL_RUN = 8
 SHAKE_DISTANCE_THRESHOLD = 200 # How close AI needs to be to start shaking
 MAX_SHAKE_INTENSITY = 8        # Max pixel offset for shake
 
+# Heartbeat settings
+HEARTBEAT_DISTANCE_THRESHOLD = 300  # Start heartbeat when AI is within this distance
+HEARTBEAT_MIN_INTERVAL = 300        # Fastest heartbeat (milliseconds)
+HEARTBEAT_MAX_INTERVAL = 1500       # Slowest heartbeat (milliseconds)
+
 PLAYER_NAMES = ['QuantifiedQuantum', 'Kalamata', 'EmoAImusic', 'MD', 'Torva', 'Haidar', 'BoboBear', 'Mohamed', 'Alucard', 'Kevin', 'Barry', 'Uniqueux', 'JanHoleman', 'TheJAM', 'megansub', 'Dereck', 'Kyle', 'Tuleku', 'Travis', 'Valor', 'Lukey', 'Mosh', 'Alazr', 'Ahmed']
 AI_NAMES = ['HAL9000', 'Skynet', 'Predator', 'DeepBlue', 'AlphaGo', 'Watson', 'Siri', 'nAIma', 'Aldan', 'mAIa', 'nAlma', 'gAIl', 'bAIley', 'dAIsy']
 
@@ -44,6 +49,8 @@ class AssetManager:
         self.sounds: Dict[str, pygame.mixer.Sound] = {}
         self.music_track = None
         self.global_volume = 0.3 
+        self.heartbeat_timer = 0
+        self.last_heartbeat_time = 0
         
         # Fonts
         self.font_sm = pygame.font.SysFont("Arial", 20, bold=True)
@@ -95,6 +102,7 @@ class AssetManager:
                 pygame.draw.rect(s, (min(base_col[0]+20,255), min(base_col[1]+20,255), min(base_col[2]+20,255)), (0,0,64,64), 1)
                 self.tiles.append(s)
 
+        # Create base vignette at full intensity
         self.vignette = pygame.Surface((width, height), pygame.SRCALPHA)
         x = np.linspace(-1, 1, width)
         y = np.linspace(-1, 1, height)
@@ -102,14 +110,33 @@ class AssetManager:
         dist = np.sqrt(xv**2 + yv**2)
         alpha = (np.minimum((dist - 0.4).clip(0, 1) * 380, 255)).astype(np.uint8).T
         pygame.surfarray.pixels_alpha(self.vignette)[:] = alpha
+    
+    def get_vignette_with_intensity(self, intensity):
+        """Return vignette with adjusted intensity (0.0 to 1.0)"""
+        if intensity <= 0:
+            return None
+        vig = self.vignette.copy()
+        vig.set_alpha(int(255 * intensity))
+        return vig
 
     def _load_audio(self):
-        if os.path.exists("footstep.mp3"):
-            try:
-                self.sounds['step'] = pygame.mixer.Sound("footstep.mp3")
-                self.set_volume(self.global_volume) 
-            except pygame.error as e:
-                print(f"Warning: Could not load footstep.mp3: {e}")
+        audio_files = {
+            'step': 'footstep.mp3',
+            'boost': 'boost.mp3',
+            'heartbeat': 'heartbeat.mp3',
+            'level_complete': 'level-complete.mp3',
+            'death': 'death.mp3'
+        }
+        
+        for key, filename in audio_files.items():
+            if os.path.exists(filename):
+                try:
+                    self.sounds[key] = pygame.mixer.Sound(filename)
+                    print(f"Loaded {filename}")
+                except pygame.error as e:
+                    print(f"Warning: Could not load {filename}: {e}")
+        
+        self.set_volume(self.global_volume)
             
     def play_music(self, track_name):
         if self.music_track == track_name: return
@@ -120,12 +147,40 @@ class AssetManager:
                 pygame.mixer.music.play(-1)
                 self.music_track = track_name
             except: pass
+    
+    def stop_music(self):
+        """Stop currently playing music"""
+        pygame.mixer.music.stop()
+        self.music_track = None
+
+    def update_heartbeat(self, distance):
+        """Continuously update heartbeat volume based on AI distance"""
+        if distance < HEARTBEAT_DISTANCE_THRESHOLD:
+            # Calculate volume based on distance (0.0 to 1.0)
+            normalized_distance = distance / HEARTBEAT_DISTANCE_THRESHOLD
+            # Inverse relationship: closer = louder
+            volume = self.global_volume * (1.0 - normalized_distance)
+            
+            if 'heartbeat' in self.sounds:
+                self.sounds['heartbeat'].set_volume(volume)
+                
+                # Start playing if not already playing
+                if pygame.mixer.Channel(1).get_busy() == False:
+                    pygame.mixer.Channel(1).play(self.sounds['heartbeat'], loops=-1)
+        else:
+            # Stop heartbeat when out of range
+            if 'heartbeat' in self.sounds:
+                pygame.mixer.Channel(1).stop()
 
     def set_volume(self, volume):
         self.global_volume = max(0.0, min(1.0, volume))
         pygame.mixer.music.set_volume(self.global_volume)
-        for s in self.sounds.values():
-            s.set_volume(self.global_volume)
+        for key, s in self.sounds.items():
+            # Heartbeat volume is dynamically controlled, so set a base volume
+            if key == 'heartbeat':
+                s.set_volume(self.global_volume * 0.5)
+            else:
+                s.set_volume(self.global_volume)
 
 # --- Entities ---
 @dataclass
@@ -156,6 +211,14 @@ class Player(Entity):
         self.boost_cooldown = 0
         self.step_timer = 0
         self.name = random.choice(PLAYER_NAMES)
+
+    def activate_boost(self, assets: AssetManager):
+        """Activate boost with sound effect"""
+        if self.boost_cooldown == 0:
+            self.boost_timer = BOOST_DURATION
+            self.boost_cooldown = BOOST_COOLDOWN
+            if 'boost' in assets.sounds:
+                assets.sounds['boost'].play()
 
     def update(self, delta, bounds, assets: AssetManager):
         if self.boost_timer > 0:
@@ -321,6 +384,7 @@ class Game:
         
         self.shake = 0
         self.shake_offset = pygame.Vector2(0,0)
+        self.vignette_intensity = 0.0  # Track vignette intensity
 
     def set_resolution(self, mode):
         if mode in VIEW_CONFIGS:
@@ -352,9 +416,8 @@ class Game:
                     if event.key in [pygame.K_d, pygame.K_RIGHT]: self.player.velocity.x = 1
                     if event.key in [pygame.K_w, pygame.K_UP]:    self.player.velocity.y = -1
                     if event.key in [pygame.K_s, pygame.K_DOWN]:  self.player.velocity.y = 1
-                    if event.key == pygame.K_SPACE and self.player.boost_cooldown == 0:
-                        self.player.boost_timer = BOOST_DURATION
-                        self.player.boost_cooldown = BOOST_COOLDOWN
+                    if event.key == pygame.K_SPACE:
+                        self.player.activate_boost(self.assets)
 
                 if event.type == pygame.KEYUP:
                     if event.key in [pygame.K_a, pygame.K_LEFT]:  self.player.velocity.x = 0
@@ -414,23 +477,40 @@ class Game:
             
             if level_up:
                 self.scene = "next_round"
+                # Stop music and play level complete sound
+                self.assets.stop_music()
+                if 'level_complete' in self.assets.sounds:
+                    self.assets.sounds['level_complete'].play()
 
             # --- FIXED: Smoother, Closer Shake Logic ---
             dist = self.player.position.distance_to(self.ai.position)
             radii = self.player.size + self.ai.size
             
-            # Start shaking when within 200 pixels
+            # Update heartbeat continuously based on distance
+            self.assets.update_heartbeat(dist)
+            
+            # Calculate intensity for all proximity effects
             if dist < SHAKE_DISTANCE_THRESHOLD:
-                # Calculate intensity: 0 at 200px, ramping up as distance decreases
-                intensity = int((SHAKE_DISTANCE_THRESHOLD - dist) / 16)
-                self.shake = min(intensity, MAX_SHAKE_INTENSITY)
+                # Normalized intensity: 0 at threshold, 1 at collision
+                intensity = 1.0 - (dist / SHAKE_DISTANCE_THRESHOLD)
+                
+                # Apply shake
+                self.shake = int(intensity * MAX_SHAKE_INTENSITY)
+                
+                # Apply vignette intensity
+                self.vignette_intensity = intensity
 
                 # Collision Check
                 if dist < radii - 5: 
                     self.scene = "game_over"
                     self.wait_timer = self.frame
+                    # Stop music and play death sound
+                    self.assets.stop_music()
+                    if 'death' in self.assets.sounds:
+                        self.assets.sounds['death'].play()
             else:
                 self.shake = 0
+                self.vignette_intensity = 0.0
             # -------------------------------------------
 
             if self.shake > 0:
@@ -460,7 +540,10 @@ class Game:
             self.ai.draw(self.screen, self.assets, self.shake_offset, self.player.position)
             self.player.draw(self.screen, self.assets, self.shake_offset)
             
-            if self.assets.vignette: self.screen.blit(self.assets.vignette, (0,0))
+            # Apply vignette with intensity based on proximity
+            vig = self.assets.get_vignette_with_intensity(self.vignette_intensity)
+            if vig: self.screen.blit(vig, (0,0))
+            
             self.draw_hud()
 
         if self.scene == "menu": self.draw_menu()
