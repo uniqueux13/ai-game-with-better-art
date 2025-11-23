@@ -1,11 +1,22 @@
 # -*- coding: utf-8 -*-
 from dataclasses import dataclass
-from typing import Callable
+from typing import Callable, Tuple, List
 
 import pygame
 import pygame.font
 import torch
 import numpy as np
+
+# --- Configuration Constants ---
+VIEW_CONFIGS = {
+    'desktop': {'width': 1024, 'height': 768},
+    'mobile':  {'width': 450, 'height': 800},
+}
+# Initial view mode and configuration (used before the game object is created)
+INITIAL_VIEW_MODE = 'desktop'
+INITIAL_CONFIG = VIEW_CONFIGS[INITIAL_VIEW_MODE]
+INITIAL_WIDTH = INITIAL_CONFIG['width']
+INITIAL_HEIGHT = INITIAL_CONFIG['height']
 
 PLAYER_NAMES = [
     'QuantifiedQuantum',
@@ -64,7 +75,7 @@ pygame.mixer.music.play(-1)
 ## TODO: why is the AI chasing the player? THOR AND HAMMER?
 ## TODO: 
 ## TODO: Max level for winner!!!! 20 levels
-## TODO:  Imporve font management a font class
+## TODO:  Imporve font management and a font class
 ## TODO: 
 ## TODO:  POINT SYSTEM to see how good you did!
 ## TODO: 
@@ -128,8 +139,9 @@ class AI(Entity):
     level: int
     model: None
     learning: int
-    optimizer: torch.optim.adamw.AdamW
-    loss: torch.nn.modules.loss.MSELoss
+    # Corrected type hints
+    optimizer: torch.optim.AdamW
+    loss: torch.nn.MSELoss
     losses: List
     features: List
     labels: List
@@ -155,7 +167,7 @@ class Game:
     running: bool
     width: int
     height: int
-    scene: str # intro, game over, play
+    scene: str # menu, settings, game over, play
     delta: int
     frame: int
     wait_frame: int
@@ -165,10 +177,13 @@ class Game:
     big_font: pygame.font.Font
     screen: pygame.surface.Surface
     clock: pygame.time.Clock
+    view_mode: str # 'desktop' or 'mobile'
 
-## Game Resolution
-width  = 720
-height = 1280
+
+## Game Resolution (Initial Setup)
+width  = INITIAL_WIDTH
+height = INITIAL_HEIGHT
+
 
 ## Main Game Setup
 player = Player(
@@ -191,7 +206,7 @@ model = torch.nn.Sequential(
 )
 ai = AI(
     name=np.random.choice(AI_NAMES),
-    position=pygame.Vector2(360, 640),
+    position=pygame.Vector2(width // 2, height // 2),
     level=1,
     speed=1,
     size=120,
@@ -222,13 +237,111 @@ game = Game(
     width=width,
     height=height,
     running=True,
-    scene="play",
+    scene="menu", # Start in the menu
     delta=0,
     frame=0,
     wait_frame=0,
     screen=pygame.display.set_mode((width, height)),
     clock=pygame.time.Clock(),
+    view_mode=INITIAL_VIEW_MODE
 )
+
+# --- Helper Functions for UI ---
+
+def draw_button(surface, rect, text, font, base_color, hover_color, mouse_click):
+    """Draws a button and returns True if clicked."""
+    mouse_pos = pygame.mouse.get_pos()
+    is_hovering = rect.collidepoint(mouse_pos)
+    color = hover_color if is_hovering else base_color
+
+    pygame.draw.rect(surface, color, rect)
+    
+    text_surface = font.render(text, True, (255, 255, 255))
+    text_rect = text_surface.get_rect(center=rect.center)
+    surface.blit(text_surface, text_rect)
+    
+    # Return True only if hovering AND a click event was registered
+    return is_hovering and mouse_click
+
+def set_screen_size(game: Game, new_mode: str):
+    """Updates the game state and display surface with new size."""
+    if new_mode in VIEW_CONFIGS:
+        config = VIEW_CONFIGS[new_mode]
+        game.width = config['width']
+        game.height = config['height']
+        game.view_mode = new_mode
+        # Re-initialize the screen with the new size
+        game.screen = pygame.display.set_mode((game.width, game.height))
+        # Update the background rect to match new screen size
+        game.background.rect = pygame.Rect(0, 0, game.width, game.height)
+        # Update AI position to be centered on the new screen
+        game.ai.position.x = game.width // 2
+        game.ai.position.y = game.height * 2 # Off-screen start
+
+# --- Scene Rendering Functions ---
+
+def render_menu_scene(game: Game, mouse_click: bool): # UPDATED: Accepts mouse_click
+    game.screen.fill("black")
+    
+    # Title Text
+    title_text = game.game_over_font.render("CHAISE: AI Hunter", True, (255, 255, 255))
+    game.screen.blit(title_text, (game.width // 2 - title_text.get_width() // 2, game.height // 4))
+
+    # --- Buttons Setup ---
+    button_height = 60
+    button_width = 250
+    center_x = game.width // 2
+    
+    # 1. Start Button
+    start_rect = pygame.Rect(center_x - button_width // 2, game.height // 2, button_width, button_height)
+    if draw_button(game.screen, start_rect, "Start Game", game.font, (0, 150, 0), (0, 200, 0), mouse_click): # UPDATED: Pass mouse_click
+        game.wait_frame = game.frame
+        game.scene = "play"
+        set_level(game, level=1) # Start Level 1
+
+    # 2. Settings Button
+    settings_rect = pygame.Rect(center_x - button_width // 2, game.height // 2 + button_height + 20, button_width, button_height)
+    if draw_button(game.screen, settings_rect, "Settings", game.font, (50, 50, 150), (80, 80, 200), mouse_click): # UPDATED: Pass mouse_click
+        game.scene = "settings"
+    
+    pygame.display.flip()
+
+
+def render_settings_scene(game: Game, mouse_click: bool): # UPDATED: Accepts mouse_click
+    game.screen.fill("black")
+    
+    # Title Text
+    title_text = game.game_over_font.render("Settings", True, (255, 255, 255))
+    game.screen.blit(title_text, (game.width // 2 - title_text.get_width() // 2, game.height // 4))
+
+    # --- Buttons Setup ---
+    button_height = 60
+    button_width = 300
+    center_x = game.width // 2
+    y_start = game.height // 2
+    
+    # 1. Desktop View Button
+    desktop_text = f"Desktop View ({VIEW_CONFIGS['desktop']['width']}x{VIEW_CONFIGS['desktop']['height']})"
+    desktop_rect = pygame.Rect(center_x - button_width // 2, y_start, button_width, button_height)
+    if draw_button(game.screen, desktop_rect, desktop_text, game.font, (0, 100, 100), (0, 150, 150), mouse_click): # UPDATED: Pass mouse_click
+        set_screen_size(game, 'desktop')
+        game.scene = "menu" # Return to main menu
+
+    # 2. Mobile View Button
+    mobile_text = f"Mobile View ({VIEW_CONFIGS['mobile']['width']}x{VIEW_CONFIGS['mobile']['height']})"
+    mobile_rect = pygame.Rect(center_x - button_width // 2, y_start + button_height + 20, button_width, button_height)
+    if draw_button(game.screen, mobile_rect, mobile_text, game.font, (100, 100, 0), (150, 150, 0), mouse_click): # UPDATED: Pass mouse_click
+        set_screen_size(game, 'mobile')
+        game.scene = "menu" # Return to main menu
+        
+    # 3. Back Button (Always needed in settings)
+    back_rect = pygame.Rect(center_x - button_width // 2, y_start + (button_height + 20) * 2, button_width, button_height)
+    if draw_button(game.screen, back_rect, "Back to Menu", game.font, (150, 50, 50), (200, 80, 80), mouse_click): # UPDATED: Pass mouse_click
+        game.scene = "menu"
+        
+    pygame.display.flip()
+
+# --- Existing Game Functions (Condensed) ---
 
 def set_level(game: Game, level: int):
     game.player.name   = np.random.choice(PLAYER_NAMES)
@@ -238,7 +351,7 @@ def set_level(game: Game, level: int):
     game.ai.knowledge  = 0
     game.ai.speed      = 1 + (level * 0.4)
     game.ai.size       = 120 + (level * 10)
-    game.ai.position.x = 360
+    game.ai.position.x = game.width // 2 
     game.ai.position.y = game.height * 2
 
 def collision(game: Game):
@@ -283,8 +396,6 @@ def render_player(game: Game):
     else:
         game.background.shake = 0
         pygame.mixer.music.set_volume(0.01)
-
-    print("shake",game.background.shake)
 
     shake = game.background.shake
     if shake:
@@ -406,10 +517,6 @@ def train(game: Game, features, labels):
     ## TODO REMOVE
     game.ai.losses.append(loss.item())
     game.ai.losses = game.ai.losses[-500:]
-    #print(
-    #    f"{len(game.ai.losses)}:",
-    #    sum(game.ai.losses) / len(game.ai.losses)
-    #)
 
     return output
 
@@ -435,7 +542,7 @@ def render_game_over_scene(game: Game):
         ## allow player to get away after game over
         game.frame = 0
         game.wait_frame = game.frame
-        game.scene = "play"
+        game.scene = "menu" # Return to menu
         set_level(game, level=1)
 
 def render_level_scene(game):
@@ -451,16 +558,31 @@ def render_level_scene(game):
 
 ## Main Game Loop
 while game.running:
+    # --- NEW: Track Mouse Click ---
+    mouse_click = False 
+    
     ## Handle Events
     for event in pygame.event.get():
         if event.type == pygame.QUIT:
             game.running = False
+        
+        # Check for a mouse button press down event
+        if event.type == pygame.MOUSEBUTTONDOWN:
+            mouse_click = True # Set flag if a click occurred
+            
+        # Check for key presses outside the menu state for debugging/quick actions
+        if game.scene == "play" and event.type == pygame.KEYDOWN:
+            if event.key == pygame.K_ESCAPE:
+                game.scene = "menu" # Quick exit to menu
 
     ## Game State Management
     game.frame += 1
     match game.scene:
-        case "intro":
-            pass
+        case "menu":
+            render_menu_scene(game, mouse_click) # Pass mouse_click
+            
+        case "settings":
+            render_settings_scene(game, mouse_click) # Pass mouse_click
 
         case "level":
             render_level_scene(game)
