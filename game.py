@@ -191,7 +191,7 @@ player = Player(
     name=np.random.choice(PLAYER_NAMES),
     position=pygame.Vector2(1, 1),
     speed=0,
-    size=60,
+    size=30,
     color=(0, 255, 255),
     text_color=(0, 155, 155),
 )
@@ -209,7 +209,7 @@ ai = AI(
     position=pygame.Vector2(width // 2, height // 2),
     level=1,
     speed=1,
-    size=120,
+    size=40,
     color=(255, 0, 0),
     text_color=(255, 255, 255),
     model=model,
@@ -284,7 +284,7 @@ def render_menu_scene(game: Game, mouse_click: bool): # UPDATED: Accepts mouse_c
     game.screen.fill("black")
     
     # Title Text
-    title_text = game.game_over_font.render("CHAISE: AI Hunter", True, (255, 255, 255))
+    title_text = game.game_over_font.render("Revenge of The AI IRS", True, (255, 255, 255))
     game.screen.blit(title_text, (game.width // 2 - title_text.get_width() // 2, game.height // 4))
 
     # --- Buttons Setup ---
@@ -350,7 +350,7 @@ def set_level(game: Game, level: int):
     game.ai.level      = level
     game.ai.knowledge  = 0
     game.ai.speed      = 1 + (level * 0.4)
-    game.ai.size       = 120 + (level * 10)
+    game.ai.size       = 40 + (level * 2)
     game.ai.position.x = game.width // 2 
     game.ai.position.y = game.height * 2
 
